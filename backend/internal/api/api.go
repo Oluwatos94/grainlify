@@ -64,28 +64,42 @@ func New(cfg config.Config, deps Deps) *fiber.App {
 		AllowCredentials: true,
 	}
 
-	// If CORS_ORIGINS is set, use it (comma-separated list)
-	if cfg.CORSOrigins != "" {
-		origins := strings.Split(cfg.CORSOrigins, ",")
-		for i := range origins {
-			origins[i] = strings.TrimSpace(origins[i])
+	// Always use AllowOriginsFunc so we can:
+	// - allow localhost for dev
+	// - allow explicit CORS_ORIGINS (comma-separated)
+	// - allow FrontendBaseURL
+	explicitOrigins := map[string]struct{}{}
+	if strings.TrimSpace(cfg.CORSOrigins) != "" {
+		for _, o := range strings.Split(cfg.CORSOrigins, ",") {
+			o = strings.TrimSpace(o)
+			if o == "" {
+				continue
+			}
+			explicitOrigins[o] = struct{}{}
 		}
-		corsConfig.AllowOrigins = strings.Join(origins, ",")
-	} else {
-		// Otherwise, use AllowOriginsFunc for dynamic checking
-		corsConfig.AllowOriginsFunc = func(origin string) bool {
-			// Always allow localhost origins for development
-			if strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:") {
+	}
+
+	corsConfig.AllowOriginsFunc = func(origin string) bool {
+		// Always allow localhost origins for development / local frontend testing.
+		if strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:") ||
+			strings.HasPrefix(origin, "https://localhost:") ||
+			strings.HasPrefix(origin, "https://127.0.0.1:") {
+			return true
+		}
+
+		if _, ok := explicitOrigins[origin]; ok {
+			return true
+		}
+
+		// If FrontendBaseURL is set, allow it.
+		if cfg.FrontendBaseURL != "" {
+			if origin == cfg.FrontendBaseURL || strings.HasPrefix(origin, cfg.FrontendBaseURL+"/") {
 				return true
 			}
-			// If FrontendBaseURL is set, allow it
-			if cfg.FrontendBaseURL != "" {
-				if origin == cfg.FrontendBaseURL || strings.HasPrefix(origin, cfg.FrontendBaseURL+"/") {
-					return true
-				}
-			}
-			return false
 		}
+
+		return false
 	}
 
 	app.Use(cors.New(corsConfig))

@@ -31,9 +31,19 @@ async function apiRequest<T>(
 
   const url = `${API_BASE_URL}${endpoint}`;
   const requestHeaders: HeadersInit = {
-    'Content-Type': 'application/json',
     ...headers,
   };
+
+  // Avoid forcing CORS preflight for simple GET/HEAD requests by only setting
+  // Content-Type when we actually send a JSON body.
+  const method = (fetchOptions.method || 'GET').toUpperCase();
+  const hasBody = fetchOptions.body !== undefined && fetchOptions.body !== null;
+  if (hasBody && !(fetchOptions.body instanceof FormData)) {
+    requestHeaders['Content-Type'] = 'application/json';
+  } else if (method !== 'GET' && method !== 'HEAD' && !('Content-Type' in (requestHeaders as any))) {
+    // Non-GET/HEAD without an explicit content-type: default to JSON for our API.
+    requestHeaders['Content-Type'] = 'application/json';
+  }
 
   // Add auth token if required
   if (requiresAuth) {
