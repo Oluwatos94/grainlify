@@ -12,6 +12,7 @@ import grainlifyLogo from '../../assets/grainlify_log.svg';
 import { useTheme } from '../../shared/contexts/ThemeContext';
 import { LanguageIcon } from '../../shared/components/LanguageIcon';
 import { UserProfileDropdown } from '../../shared/components/UserProfileDropdown';
+import { NotificationsDropdown } from '../../shared/components/NotificationsDropdown';
 import { RoleSwitcher } from '../../shared/components/RoleSwitcher';
 import { Modal, ModalFooter, ModalButton, ModalInput } from '../../shared/components/ui/Modal';
 import { bootstrapAdmin } from '../../shared/api/client';
@@ -409,23 +410,8 @@ export function Dashboard() {
               )}
             </button>
 
-            {/* Notifications - Separate Pill Button */}
-            <button
-              className={`h-[46px] w-[46px] rounded-full relative flex items-center justify-center backdrop-blur-[40px] transition-all hover:scale-105 shadow-[0px_6px_6.5px_-1px_rgba(0,0,0,0.36),0px_0px_4.2px_0px_rgba(0,0,0,0.69)] ${
-                darkTheme ? 'bg-[#2d2820]' : 'bg-[#d4c5b0]'
-              }`}
-            >
-              <div className={`absolute inset-0 pointer-events-none rounded-full ${
-                darkTheme
-                  ? 'shadow-[inset_1px_-1px_1px_0px_rgba(0,0,0,0.5),inset_-2px_2px_1px_-1px_rgba(255,255,255,0.11)]'
-                  : 'shadow-[inset_1px_-1px_1px_0px_rgba(0,0,0,0.15),inset_-2px_2px_1px_-1px_rgba(255,255,255,0.35)]'
-              }`} />
-              <Bell className={`w-4 h-4 relative z-10 transition-colors ${
-                darkTheme ? 'text-[rgba(255,255,255,0.69)]' : 'text-[rgba(45,40,32,0.75)]'
-              }`} />
-              {/* Notification Badge - Golden Dot */}
-              <div className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-br from-[#e8c571] to-[#c9983a] rounded-full shadow-[0_2px_8px_rgba(201,152,58,0.9),0_0_12px_rgba(201,152,58,0.7)] z-20 border-[2px] border-white" />
-            </button>
+            {/* Notifications Dropdown */}
+            <NotificationsDropdown />
 
             {/* User Profile Dropdown - Shows profile when authenticated, Sign In when not */}
             <UserProfileDropdown onPageChange={handleNavigation} />
