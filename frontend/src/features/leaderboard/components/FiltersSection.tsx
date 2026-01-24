@@ -12,8 +12,6 @@ interface FiltersSectionProps {
   showDropdown: boolean;
   onToggleDropdown: () => void;
   isLoaded: boolean;
-  ecosystems: string[];
-  isLoadingEcosystems?: boolean;
 }
 
 interface EcosystemOption {
