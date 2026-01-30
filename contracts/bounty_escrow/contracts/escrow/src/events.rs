@@ -393,3 +393,18 @@ pub fn emit_emergency_withdrawal(env: &Env, event: EmergencyWithdrawal) {
     let topics = (symbol_short!("ewith"),);
     env.events().publish(topics, event.clone());
 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EscrowExpired {
+    pub bounty_id: u64,
+    pub amount: i128,
+    pub refunded_to: Address,
+    pub triggered_by: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_escrow_expired(env: &Env, event: EscrowExpired) {
+    let topics = (symbol_short!("expired"), event.bounty_id);
+    env.events().publish(topics, event.clone());
+}

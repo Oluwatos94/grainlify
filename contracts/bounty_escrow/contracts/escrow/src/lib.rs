@@ -92,10 +92,10 @@ mod test_bounty_escrow;
 
 use events::{
     emit_batch_funds_locked, emit_batch_funds_released, emit_bounty_initialized,
-    emit_contract_paused, emit_contract_unpaused, emit_emergency_withdrawal, emit_funds_locked,
-    emit_funds_refunded, emit_funds_released, BatchFundsLocked, BatchFundsReleased,
-    BountyEscrowInitialized, ContractPaused, ContractUnpaused, EmergencyWithdrawal, FundsLocked,
-    FundsRefunded, FundsReleased,
+    emit_contract_paused, emit_contract_unpaused, emit_emergency_withdrawal, emit_escrow_expired,
+    emit_funds_locked, emit_funds_refunded, emit_funds_released, BatchFundsLocked,
+    BatchFundsReleased, BountyEscrowInitialized, ContractPaused, ContractUnpaused,
+    EmergencyWithdrawal, EscrowExpired, FundsLocked, FundsRefunded, FundsReleased,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, vec, Address, Env,
@@ -1190,6 +1190,13 @@ impl BountyEscrowContract {
             return Err(Error::FundsNotLocked);
         }
 
+        let now = env.ledger().timestamp();
+        if now >= escrow.deadline {
+            monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
+            return Err(Error::DeadlineNotPassed);
+        }
+
         // Transfer funds to contributor
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
@@ -1305,6 +1312,86 @@ impl BountyEscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::RefundApproval(bounty_id), &approval);
+
+        Ok(())
+    }
+
+    /// Expire an escrow and automatically refund to depositor after deadline.
+    /// This function can be called by anyone after the deadline has passed.
+    /// It provides a permissionless way to ensure funds are not stuck indefinitely.
+    pub fn expire(env: Env, bounty_id: u64) -> Result<(), Error> {
+        let start = env.ledger().timestamp();
+
+        if Self::is_paused_internal(&env) {
+            return Err(Error::ContractPaused);
+        }
+
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyNotFound);
+        }
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+
+        if escrow.status != EscrowStatus::Locked && escrow.status != EscrowStatus::PartiallyRefunded
+        {
+            return Err(Error::FundsNotLocked);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < escrow.deadline {
+            return Err(Error::DeadlineNotPassed);
+        }
+
+        let refund_amount = escrow.remaining_amount;
+        if refund_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let client = token::Client::new(&env, &token_addr);
+
+        let contract_balance = client.balance(&env.current_contract_address());
+        if contract_balance < refund_amount {
+            return Err(Error::InsufficientFunds);
+        }
+
+        client.transfer(
+            &env.current_contract_address(),
+            &escrow.depositor,
+            &refund_amount,
+        );
+
+        let refund_record = RefundRecord {
+            amount: refund_amount,
+            recipient: escrow.depositor.clone(),
+            mode: RefundMode::Full,
+            timestamp: env.ledger().timestamp(),
+        };
+        escrow.refund_history.push_back(refund_record);
+        escrow.remaining_amount = 0;
+        escrow.status = EscrowStatus::Refunded;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        emit_escrow_expired(
+            &env,
+            EscrowExpired {
+                bounty_id,
+                amount: refund_amount,
+                refunded_to: escrow.depositor.clone(),
+                triggered_by: env.current_contract_address(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("expire"), duration);
 
         Ok(())
     }
