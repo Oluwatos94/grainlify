@@ -822,6 +822,61 @@ impl BountyEscrowContract {
         Self::get_fee_config_internal(&env)
     }
 
+    /// Update amount limits configuration (admin only)
+    pub fn update_amount_limits(
+        env: Env,
+        min_lock_amount: i128,
+        max_lock_amount: i128,
+        min_payout: i128,
+        max_payout: i128,
+    ) -> Result<(), Error> {
+        // Get admin and require authorization
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        // Validate limits
+        if min_lock_amount < 0 || max_lock_amount < 0 || min_payout < 0 || max_payout < 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if min_lock_amount > max_lock_amount || min_payout > max_payout {
+            return Err(Error::InvalidAmount);
+        }
+
+        let limits = AmountLimits {
+            min_lock_amount,
+            max_lock_amount,
+            min_payout,
+            max_payout,
+        };
+
+        env.storage().instance().set(&DataKey::AmountLimits, &limits);
+
+        // Emit event
+        env.events().publish(
+            (symbol_short!("amt_lmt"),),
+            (min_lock_amount, max_lock_amount, min_payout, max_payout),
+        );
+
+        Ok(())
+    }
+
+    /// Get current amount limits configuration (view function)
+    pub fn get_amount_limits(env: Env) -> AmountLimits {
+        env.storage()
+            .instance()
+            .get(&DataKey::AmountLimits)
+            .unwrap_or(AmountLimits {
+                min_lock_amount: 1,
+                max_lock_amount: i128::MAX,
+                min_payout: 1,
+                max_payout: i128::MAX,
+            })
+    }
+
     // ========================================================================
     // Pause and Emergency Functions
     // ========================================================================
