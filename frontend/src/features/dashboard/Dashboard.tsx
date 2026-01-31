@@ -69,10 +69,13 @@ export function Dashboard() {
   const [selectedEventName, setSelectedEventName] = useState<string | null>(
     null,
   );
-  const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth < 1024 : false,
+  );
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
-    typeof window !== 'undefined' ? window.innerWidth < 1100 : false);
+    typeof window !== "undefined" ? window.innerWidth < 1100 : false,
+  );
   const [activeRole, setActiveRole] = useState<
     "contributor" | "maintainer" | "admin"
   >("contributor");
@@ -81,13 +84,13 @@ export function Dashboard() {
   const [settingsInitialTab, setSettingsInitialTab] =
     useState<SettingsTabType>("profile");
 
-  useEffect(() => { 
+  useEffect(() => {
     const handleResize = () => {
       setIsMobile(window.innerWidth < 1024);
     };
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
   // ******************************************
 
@@ -117,21 +120,27 @@ export function Dashboard() {
     const userParam = params.get("user");
     const pageParam = params.get("page");
 
-    if (pageParam === "profile" && userParam) {
+    if (pageParam === "profile") {
       setCurrentPage("profile");
-      // Check if it's a UUID (user_id) or a username (login)
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (uuidRegex.test(userParam)) {
-        setViewingUserId(userParam);
-        setViewingUserLogin(null);
+
+      if (userParam) {
+        // Viewing someone else's profile
+        const uuidRegex =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (uuidRegex.test(userParam)) {
+          setViewingUserId(userParam);
+          setViewingUserLogin(null);
+        } else {
+          setViewingUserLogin(userParam);
+          setViewingUserId(null);
+        }
       } else {
-        setViewingUserLogin(userParam);
+        // No user param = viewing own profile
         setViewingUserId(null);
+        setViewingUserLogin(null);
       }
     }
-  }, []);
-
+  }, [window.location.search]); // React to URL changes
   // *******************************
   useEffect(() => {
     // Save tab in URL + localStorage whenever it changes
@@ -142,8 +151,6 @@ export function Dashboard() {
 
     localStorage.setItem("dashboardTab", currentPage);
   }, [currentPage]);
-
-
 
   // Keyboard shortcut for search (Cmd+K / Ctrl+K)
   useEffect(() => {
@@ -172,14 +179,10 @@ export function Dashboard() {
     }
   };
 
-
-
   const openAdminAuthModal = (target: "nav" | "role") => {
     setPendingAdminTarget(target);
     setShowAdminPasswordModal(true);
   };
-
-
 
   const handleAdminPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -299,16 +302,24 @@ export function Dashboard() {
       {/* Sidebar */}
       <aside
         className={`fixed top-2 left-2 bottom-2 z-[101] transition-all duration-300 ${
-          isMobile 
-            ? mobileMenuOpen ? "translate-x-0 w-64" : "-translate-x-[110%] w-64" 
-            : isSidebarCollapsed ? "w-[65px]" : "w-56"
+          isMobile
+            ? mobileMenuOpen
+              ? "translate-x-0 w-64"
+              : "-translate-x-[110%] w-64"
+            : isSidebarCollapsed
+              ? "w-[65px]"
+              : "w-56"
         }`}
       >
         {/* Toggle Arrow Button - positioned at top of sidebar aligned with header */}
         <button
           onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
           className={`absolute z-[100] backdrop-blur-[90px] rounded-full border-[0.5px] w-6 h-6 shadow-md hover:shadow-lg transition-all flex items-center justify-center ${
-            isMobile ? "hidden" : isSidebarCollapsed ? "-right-3 top-[60px]" : "-right-3 top-[60px]"
+            isMobile
+              ? "hidden"
+              : isSidebarCollapsed
+                ? "-right-3 top-[60px]"
+                : "-right-3 top-[60px]"
           } ${
             darkTheme
               ? "bg-[#2d2820]/[0.85] border-[rgba(201,152,58,0.2)]"
@@ -421,7 +432,10 @@ export function Dashboard() {
             {isMobile && (
               <div className="mt-auto px-2 pb-4 w-full">
                 <div className="h-[0.5px] opacity-[0.24] mb-6 bg-gradient-to-r from-transparent via-[#432c2c] to-transparent w-full" />
-                <UserProfileDropdown onPageChange={handleNavigation} showMobileNav={true} />
+                <UserProfileDropdown
+                  onPageChange={handleNavigation}
+                  showMobileNav={true}
+                />
               </div>
             )}
           </div>
@@ -436,10 +450,10 @@ export function Dashboard() {
           {/* Premium Pill-Style Header - Greatest of All Time */}
           <div
             className={`fixed top-2 right-2 z-[9999] flex items-center gap-1 md:gap-2 lg:gap-3 lg:h-[52px] py-3 rounded-[26px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)] backdrop-blur-[90px] border transition-all duration-300 ${
-              isMobile 
-                ? "left-2 w-[calc(100vw-16px)]" 
-                : isSidebarCollapsed 
-                  ? "left-[81px] w-[calc(100vw-81px-16px)]" 
+              isMobile
+                ? "left-2 w-[calc(100vw-16px)]"
+                : isSidebarCollapsed
+                  ? "left-[81px] w-[calc(100vw-81px-16px)]"
                   : "left-[240px] w-[calc(100vw-240px-16px)]"
             } ${
               darkTheme
@@ -448,12 +462,11 @@ export function Dashboard() {
             } 
           `}
           >
-          
             {/* Menu button on the far left for mobile */}
             {isMobile && (
               <button
                 className={`lg:hidden transition-colors ml-4 mr-2 ${
-                  theme === 'dark' ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
+                  theme === "dark" ? "text-[#e8dfd0]" : "text-[#2d2820]"
                 }`}
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               >
@@ -463,10 +476,13 @@ export function Dashboard() {
 
             {/* Search - Premium Pill Style / Mobile Icon */}
             <button
-              onClick={() => {setCurrentPage("search");closeMobileNav();}}
+              onClick={() => {
+                setCurrentPage("search");
+                closeMobileNav();
+              }}
               className={`relative h-[46px] rounded-[23px] overflow-visible backdrop-blur-[40px] shadow-[0px_6px_6.5px_-1px_rgba(0,0,0,0.36),0px_0px_4.2px_0px_rgba(0,0,0,0.69)] ml-[3px] transition-all hover:scale-[1.01] cursor-pointer ${
                 darkTheme ? "bg-[#2d2820]" : "bg-[#d4c5b0]"
-              } ${isMobile ? 'w-[46px] flex items-center justify-center' : 'lg:flex-1 lg:flex hidden'}
+              } ${isMobile ? "w-[46px] flex items-center justify-center" : "lg:flex-1 lg:flex hidden"}
               `}
             >
               <div
@@ -476,14 +492,18 @@ export function Dashboard() {
                     : "shadow-[inset_1px_-1px_1px_0px_rgba(0,0,0,0.15),inset_-2px_2px_1px_-1px_rgba(255,255,255,0.35)]"
                 }`}
               />
-              <div className={`relative h-full flex items-center ${isMobile ? 'justify-center w-full' : 'px-2 lg:px-5 justify-between'}`}>
-                <div className={`flex items-center ${isMobile ? '' : 'flex-1'}`}>
+              <div
+                className={`relative h-full flex items-center ${isMobile ? "justify-center w-full" : "px-2 lg:px-5 justify-between"}`}
+              >
+                <div
+                  className={`flex items-center ${isMobile ? "" : "flex-1"}`}
+                >
                   <Search
                     className={`w-4 h-4 flex-shrink-0 transition-colors ${
                       darkTheme
                         ? "text-[rgba(255,255,255,0.69)]"
                         : "text-[rgba(45,40,32,0.75)]"
-                    } ${isMobile ? '' : 'mr-3'}`}
+                    } ${isMobile ? "" : "mr-3"}`}
                   />
                   {!isMobile && (
                     <span
@@ -541,8 +561,7 @@ export function Dashboard() {
                 </div>
               </div>
             </button>
-               
-          
+
             {/* Role Switcher */}
             <RoleSwitcher
               currentRole={activeRole}
@@ -556,13 +575,15 @@ export function Dashboard() {
             {/* Theme Toggle - Separate Pill Button */}
             <button
               onClick={() => {
-               toggleTheme()
-               closeMobileNav(); 
+                toggleTheme();
+                closeMobileNav();
               }}
               className={`h-[46px] lg:w-[46px] overflow-clip relative items-center justify-center backdrop-blur-[40px] transition-all hover:scale-105 shadow-[0px_6px_6.5px_-1px_rgba(0,0,0,0.36),0px_0px_4.2px_0px_rgba(0,0,0,0.69)] ${
-                darkTheme ? "bg-[#2d2820] text-[#e8dfd0]" : "bg-[#d4c5b0] text-[#2d2820]"
+                darkTheme
+                  ? "bg-[#2d2820] text-[#e8dfd0]"
+                  : "bg-[#d4c5b0] text-[#2d2820]"
               }
-              ${isMobile ? ' flex rounded-full w-[46px] ' : ' hidden lg:flex rounded-full '}`}
+              ${isMobile ? " flex rounded-full w-[46px] " : " hidden lg:flex rounded-full "}`}
               title={darkTheme ? "Switch to light mode" : "Switch to dark mode"}
             >
               <div
@@ -570,7 +591,7 @@ export function Dashboard() {
                   darkTheme
                     ? "shadow-[inset_1px_-1px_1px_0px_rgba(0,0,0,0.5),inset_-2px_2px_1px_-1px_rgba(255,255,255,0.11)]"
                     : "shadow-[inset_1px_-1px_1px_0px_rgba(0,0,0,0.15),inset_-2px_2px_1px_-1px_rgba(255,255,255,0.35)]"
-                } ${mobileMenuOpen && isMobile ? 'rounded-sm' : 'rounded-full'}`}
+                } ${mobileMenuOpen && isMobile ? "rounded-sm" : "rounded-full"}`}
               />
               {darkTheme ? (
                 <Sun
@@ -589,20 +610,19 @@ export function Dashboard() {
                   }`}
                 />
               )}
-
             </button>
 
             {/* Notifications Dropdown */}
-            <NotificationsDropdown 
-              showMobileNav={mobileMenuOpen && isMobile} 
+            <NotificationsDropdown
+              showMobileNav={mobileMenuOpen && isMobile}
               closeMobileNav={closeMobileNav}
               isIconOnly={isMobile}
             />
 
             {/* User Profile - Header placement for desktop */}
-            <UserProfileDropdown 
-              onPageChange={handleNavigation} 
-              showMobileNav={false} 
+            <UserProfileDropdown
+              onPageChange={handleNavigation}
+              showMobileNav={false}
             />
 
             {/* mobile nav open button - removed from right side */}
@@ -673,8 +693,12 @@ export function Dashboard() {
                       onProjectClick={(id) => setSelectedProjectId(id)}
                     />
                   )}
-                {currentPage === "contributors" && <ContributorsPage onNavigate={handleNavigation} />}
-                {currentPage === "maintainers" && <MaintainersPage onNavigate={handleNavigation} />}
+                {currentPage === "contributors" && (
+                  <ContributorsPage onNavigate={handleNavigation} />
+                )}
+                {currentPage === "maintainers" && (
+                  <MaintainersPage onNavigate={handleNavigation} />
+                )}
                 {currentPage === "profile" && (
                   <ProfilePage
                     viewingUserId={viewingUserId}
