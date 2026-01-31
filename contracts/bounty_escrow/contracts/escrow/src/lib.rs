@@ -92,6 +92,11 @@ mod events;
 mod indexed;
 mod test_blacklist;
 mod test_bounty_escrow;
+pub mod security {
+    pub mod reentrancy_guard;
+}
+
+use security::reentrancy_guard::{ReentrancyGuard, ReentrancyGuardRAII};
 
 use blacklist::{
     add_to_blacklist, add_to_whitelist, is_participant_allowed, remove_from_blacklist,
@@ -490,6 +495,7 @@ pub enum Error {
     InvalidDeadlineExtension = 19,
     /// Returned when metadata exceeds size limits
     MetadataTooLarge = 20,
+    ReentrantCall = 21,
     /// Returned when participant is blacklisted or not whitelisted
     ParticipantNotAllowed = 21,
 }
@@ -710,6 +716,15 @@ impl From<FeeConfig> for SharedFeeConfig {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AmountLimits {
+    pub min_lock_amount: i128,
+    pub max_lock_amount: i128,
+    pub min_payout: i128,
+    pub max_payout: i128,
+}
+
 // Fee rate is stored in basis points (1 basis point = 0.01%)
 // Example: 100 basis points = 1%, 1000 basis points = 10%
 const BASIS_POINTS: i128 = 10_000;
@@ -722,6 +737,7 @@ pub enum DataKey {
     Escrow(u64),         // bounty_id
     EscrowMetadata(u64), // bounty_id -> EscrowMetadata
     FeeConfig,           // Fee configuration
+    AmountLimits,        // Amount limits configuration
     RefundApproval(u64), // bounty_id -> RefundApproval
     ReentrancyGuard,
     IsPaused, // Contract pause state
@@ -916,6 +932,17 @@ impl BountyEscrowContract {
             .instance()
             .set(&DataKey::FeeConfig, &fee_config);
 
+        // Initialize amount limits with default values
+        let amount_limits = AmountLimits {
+            min_lock_amount: 1,
+            max_lock_amount: i128::MAX,
+            min_payout: 1,
+            max_payout: i128::MAX,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::AmountLimits, &amount_limits);
+
         // Emit initialization event
         // emit_bounty_initialized(
         //     &env,
@@ -1027,6 +1054,68 @@ impl BountyEscrowContract {
         );
 
         Ok(())
+    }
+
+    /// Get current fee configuration (view function)
+    pub fn get_fee_config(env: Env) -> FeeConfig {
+        Self::get_fee_config_internal(&env)
+    }
+
+    /// Update amount limits configuration (admin only)
+    pub fn update_amount_limits(
+        env: Env,
+        min_lock_amount: i128,
+        max_lock_amount: i128,
+        min_payout: i128,
+        max_payout: i128,
+    ) -> Result<(), Error> {
+        // Get admin and require authorization
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        // Validate limits
+        if min_lock_amount < 0 || max_lock_amount < 0 || min_payout < 0 || max_payout < 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if min_lock_amount > max_lock_amount || min_payout > max_payout {
+            return Err(Error::InvalidAmount);
+        }
+
+        let limits = AmountLimits {
+            min_lock_amount,
+            max_lock_amount,
+            min_payout,
+            max_payout,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::AmountLimits, &limits);
+
+        // Emit event
+        env.events().publish(
+            (symbol_short!("amt_lmt"),),
+            (min_lock_amount, max_lock_amount, min_payout, max_payout),
+        );
+
+        Ok(())
+    }
+
+    /// Get current amount limits configuration (view function)
+    pub fn get_amount_limits(env: Env) -> AmountLimits {
+        env.storage()
+            .instance()
+            .get(&DataKey::AmountLimits)
+            .unwrap_or(AmountLimits {
+                min_lock_amount: 1,
+                max_lock_amount: i128::MAX,
+                min_payout: 1,
+                max_payout: i128::MAX,
+            })
     }
 
     // ========================================================================
@@ -1248,15 +1337,16 @@ impl BountyEscrowContract {
         // Verify depositor authorization
         depositor.require_auth();
 
-        // Ensure contract is initialized
-        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
-            panic!("Reentrancy detected");
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::ReentrancyGuard, &true);
+        let _guard = ReentrancyGuardRAII::new(&env).map_err(|_| Error::ReentrantCall)?;
 
         if amount <= 0 {
+            monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
+            return Err(Error::InvalidAmount);
+        }
+
+        // Check amount limits
+        let limits = Self::get_amount_limits(env.clone());
+        if amount < limits.min_lock_amount || amount > limits.max_lock_amount {
             monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
             env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::InvalidAmount);
@@ -1264,19 +1354,16 @@ impl BountyEscrowContract {
 
         if deadline <= env.ledger().timestamp() {
             monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
-            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::InvalidDeadline);
         }
         if !env.storage().instance().has(&DataKey::Admin) {
             monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
-            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::NotInitialized);
         }
 
         // Prevent duplicate bounty IDs
         if env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
-            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::BountyExists);
         }
 
@@ -1337,8 +1424,6 @@ impl BountyEscrowContract {
         //     },
         // );
         on_funds_locked(&env, bounty_id, amount, &depositor, deadline);
-
-        env.storage().instance().remove(&DataKey::ReentrancyGuard);
 
         // Track successful operation
         monitoring::track_operation(&env, symbol_short!("lock"), caller, true);
@@ -1492,15 +1577,8 @@ impl BountyEscrowContract {
 
         let start = env.ledger().timestamp();
 
-        // Ensure contract is initialized
-        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
-            panic!("Reentrancy detected");
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::ReentrancyGuard, &true);
+        let _guard = ReentrancyGuardRAII::new(&env).map_err(|_| Error::ReentrantCall)?;
         if !env.storage().instance().has(&DataKey::Admin) {
-            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::NotInitialized);
         }
 
@@ -1522,7 +1600,6 @@ impl BountyEscrowContract {
         // Verify bounty exists
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
-            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::BountyNotFound);
         }
 
@@ -1535,7 +1612,6 @@ impl BountyEscrowContract {
 
         if escrow.status != EscrowStatus::Locked {
             monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
-            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::FundsNotLocked);
         }
 
@@ -1562,6 +1638,14 @@ impl BountyEscrowContract {
             0
         };
         let net_amount = escrow.amount - fee_amount;
+
+        // Check payout amount limits
+        let limits = Self::get_amount_limits(env.clone());
+        if net_amount < limits.min_payout || net_amount > limits.max_payout {
+            monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
+            return Err(Error::InvalidAmount);
+        }
 
         // Transfer net amount to contributor
         client.transfer(&env.current_contract_address(), &contributor, &net_amount);
@@ -1612,8 +1696,6 @@ impl BountyEscrowContract {
             escrow.remaining_amount,
             false,
         );
-
-        env.storage().instance().remove(&DataKey::ReentrancyGuard);
 
         // Track successful operation
         monitoring::track_operation(&env, symbol_short!("release"), admin, true);
@@ -1768,6 +1850,8 @@ impl BountyEscrowContract {
     ) -> Result<(), Error> {
         let start = env.ledger().timestamp();
 
+        let _guard = ReentrancyGuardRAII::new(&env).map_err(|_| Error::ReentrantCall)?;
+
         // Check if contract is paused
         if Self::is_paused_internal(&env) {
             let caller = env.current_contract_address();
@@ -1778,7 +1862,6 @@ impl BountyEscrowContract {
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             let caller = env.current_contract_address();
             monitoring::track_operation(&env, symbol_short!("refund"), caller, false);
-            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::BountyNotFound);
         }
 
@@ -1921,8 +2004,6 @@ impl BountyEscrowContract {
             mode,
             &caller,
         );
-
-        env.storage().instance().remove(&DataKey::ReentrancyGuard);
 
         // Track successful operation
         monitoring::track_operation(&env, symbol_short!("refund"), caller, true);
@@ -2323,6 +2404,7 @@ impl BountyEscrowContract {
     /// # Note
     /// This operation is atomic - if any item fails, the entire transaction reverts.
     pub fn batch_lock_funds(env: Env, items: Vec<LockFundsItem>) -> Result<u32, Error> {
+        let _guard = ReentrancyGuardRAII::new(&env).map_err(|_| Error::ReentrantCall)?;
         // Validate batch size
         let batch_size = items.len();
         if batch_size == 0 {
@@ -2359,6 +2441,12 @@ impl BountyEscrowContract {
 
             // Validate amount
             if item.amount <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+
+            // Check amount limits
+            let limits = Self::get_amount_limits(env.clone());
+            if item.amount < limits.min_lock_amount || item.amount > limits.max_lock_amount {
                 return Err(Error::InvalidAmount);
             }
 
@@ -2466,6 +2554,7 @@ impl BountyEscrowContract {
     /// # Note
     /// This operation is atomic - if any item fails, the entire transaction reverts.
     pub fn batch_release_funds(env: Env, items: Vec<ReleaseFundsItem>) -> Result<u32, Error> {
+        let _guard = ReentrancyGuardRAII::new(&env).map_err(|_| Error::ReentrantCall)?;
         // Validate batch size
         let batch_size = items.len();
         if batch_size == 0 {
@@ -2513,6 +2602,20 @@ impl BountyEscrowContract {
             // Check if funds are locked
             if escrow.status != EscrowStatus::Locked {
                 return Err(Error::FundsNotLocked);
+            }
+
+            // Check payout amount limits (considering fees)
+            let fee_config = Self::get_fee_config_internal(&env);
+            let fee_amount = if fee_config.fee_enabled && fee_config.release_fee_rate > 0 {
+                Self::calculate_fee(escrow.amount, fee_config.release_fee_rate)
+            } else {
+                0
+            };
+            let net_amount = escrow.amount - fee_amount;
+
+            let limits = Self::get_amount_limits(env.clone());
+            if net_amount < limits.min_payout || net_amount > limits.max_payout {
+                return Err(Error::InvalidAmount);
             }
 
             // Check for duplicate bounty_ids in the batch
@@ -2587,6 +2690,7 @@ impl BountyEscrowContract {
     }
 }
 
+#[cfg(test)]
 #[cfg(test)]
 mod test;
 
@@ -2696,10 +2800,11 @@ impl Pausable for BountyEscrowContract {
     }
 }
 #[cfg(test)]
-mod test_fuzz_properties;
-
+mod reentrancy_test;
 #[cfg(test)]
 mod test_edge_cases;
+#[cfg(test)]
+mod test_fuzz_properties;
 
 mod pause_tests;
 #[cfg(test)]

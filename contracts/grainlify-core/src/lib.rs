@@ -158,12 +158,22 @@ mod multisig;
 mod state_verifier;
 #[cfg(test)]
 mod test;
-mod test_audit;
 
+mod governance;
+mod test_audit;
+pub mod security {
+    pub mod reentrancy_guard;
+}
+#[cfg(test)]
+mod reentrancy_tests;
+#[cfg(test)]
+mod test;
 pub use governance::{
     Error as GovError, GovernanceConfig, Proposal, ProposalStatus, Vote, VoteType, VotingScheme,
 };
 use grainlify_common::AuditReport;
+use grainlify_common::AuditReport;
+use multisig::MultiSig;
 use multisig::MultiSig;
 use multisig::MultiSig;
 use soroban_sdk::{
@@ -601,6 +611,8 @@ impl GrainlifyContract {
         new_wasm_hash: BytesN<32>,
         description: Symbol,
     ) -> Result<u32, governance::Error> {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .map_err(|_| governance::Error::ReentrantCall)?;
         governance::GovernanceContract::create_proposal(&env, proposer, new_wasm_hash, description)
     }
 
@@ -611,6 +623,8 @@ impl GrainlifyContract {
         proposal_id: u32,
         vote_type: governance::VoteType,
     ) -> Result<(), governance::Error> {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .map_err(|_| governance::Error::ReentrantCall)?;
         governance::GovernanceContract::cast_vote(env, voter, proposal_id, vote_type)
     }
 
@@ -619,6 +633,8 @@ impl GrainlifyContract {
         env: Env,
         proposal_id: u32,
     ) -> Result<governance::ProposalStatus, governance::Error> {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .map_err(|_| governance::Error::ReentrantCall)?;
         governance::GovernanceContract::finalize_proposal(env, proposal_id)
     }
 
@@ -628,6 +644,8 @@ impl GrainlifyContract {
         executor: Address,
         proposal_id: u32,
     ) -> Result<(), governance::Error> {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .map_err(|_| governance::Error::ReentrantCall)?;
         governance::GovernanceContract::execute_proposal(env, executor, proposal_id)
     }
 
@@ -669,6 +687,8 @@ impl GrainlifyContract {
     /// # Returns
     /// * `u64` - The proposal ID
     pub fn propose_upgrade(env: Env, proposer: Address, wasm_hash: BytesN<32>) -> u64 {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .expect("Reentrancy detected");
         let proposal_id = MultiSig::propose(&env, proposer);
 
         env.storage()
@@ -685,6 +705,8 @@ impl GrainlifyContract {
     /// * `proposal_id` - The ID of the proposal to approve
     /// * `signer` - Address approving the proposal
     pub fn approve_upgrade(env: Env, proposal_id: u64, signer: Address) {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .expect("Reentrancy detected");
         MultiSig::approve(&env, proposal_id, signer);
     }
 
@@ -786,6 +808,8 @@ impl GrainlifyContract {
     /// * `env` - The contract environment
     /// * `proposal_id` - The ID of the upgrade proposal to execute
     pub fn execute_upgrade(env: Env, proposal_id: u64) {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .expect("Reentrancy detected");
         if !MultiSig::can_execute(&env, proposal_id) {
             panic!("Threshold not met");
         }
@@ -807,6 +831,8 @@ impl GrainlifyContract {
     /// * `env` - The contract environment
     /// * `new_wasm_hash` - Hash of the uploaded WASM code (32 bytes)
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let _guard = security::reentrancy_guard::ReentrancyGuardRAII::new(&env)
+            .expect("Reentrancy detected");
         let start = env.ledger().timestamp();
 
         // Verify admin authorization
@@ -1016,6 +1042,17 @@ impl GrainlifyContract {
     /// Get performance stats for a function
     pub fn get_performance_stats(env: Env, function_name: Symbol) -> monitoring::PerformanceStats {
         monitoring::get_performance_stats(&env, function_name)
+    }
+
+    /// Returns an audit report of the contract state.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    ///
+    /// # Returns
+    /// * `AuditReport` - Detailed report of state integrity
+    pub fn audit_state(env: Env) -> AuditReport {
+        state_verifier::audit_global_state(&env)
     }
 
     // ========================================================================
