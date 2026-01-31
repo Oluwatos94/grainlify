@@ -87,12 +87,18 @@
 //! ```
 
 #![no_std]
+mod blacklist;
 mod events;
 mod indexed;
+mod test_blacklist;
 mod test_bounty_escrow;
 //#[cfg(test)]
 //mod test_query;
 
+use blacklist::{
+    add_to_blacklist, add_to_whitelist, is_participant_allowed, remove_from_blacklist,
+    remove_from_whitelist, set_whitelist_mode,
+};
 use events::{
     emit_admin_action_cancelled, emit_admin_action_executed, emit_admin_action_proposed,
     emit_admin_updated, emit_batch_funds_locked, emit_batch_funds_released,
@@ -467,6 +473,8 @@ pub enum Error {
     ActionNotFound = 24,
     ActionNotReady = 25,
     InvalidTimeLock = 26,
+    /// Returned when participant is blacklisted or not whitelisted
+    ParticipantNotAllowed = 21,
 }
 
 // ============================================================================
@@ -1634,6 +1642,142 @@ impl BountyEscrowContract {
     // Core Functions (Lock, Release, Refund)
     // ========================================================================
 
+    /// Add an address to the blacklist (admin only)
+    ///
+    /// Blacklisted addresses cannot lock funds or receive payouts.
+    /// Used for compliance (e.g., sanctioned addresses) or abuse prevention.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `address` - Address to blacklist
+    /// * `reason` - Optional reason for blacklisting
+    ///
+    /// # Authorization
+    /// - Admin only
+    pub fn set_blacklist(
+        env: Env,
+        address: Address,
+        blocked: bool,
+        reason: Option<String>,
+    ) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if blocked {
+            add_to_blacklist(&env, address, reason);
+        } else {
+            remove_from_blacklist(&env, address);
+        }
+
+        Ok(())
+    }
+
+    /// Add an address to the whitelist (admin only)
+    ///
+    /// When whitelist mode is enabled, only whitelisted addresses can participate.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `address` - Address to whitelist
+    /// * `whitelisted` - true to add, false to remove
+    ///
+    /// # Authorization
+    /// - Admin only
+    pub fn set_whitelist(env: Env, address: Address, whitelisted: bool) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if whitelisted {
+            add_to_whitelist(&env, address);
+        } else {
+            remove_from_whitelist(&env, address);
+        }
+
+        Ok(())
+    }
+
+    /// Toggle whitelist-only mode (admin only)
+    ///
+    /// When enabled, only whitelisted addresses can lock funds or receive payouts.
+    /// When disabled, all non-blacklisted addresses can participate.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `enabled` - true to enable whitelist-only mode
+    ///
+    /// # Authorization
+    /// - Admin only
+    pub fn set_whitelist_mode(env: Env, enabled: bool) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        set_whitelist_mode(&env, enabled);
+
+        Ok(())
+    }
+
+    /// Lock funds for a specific bounty.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `depositor` - Address depositing the funds (must authorize)
+    /// * `bounty_id` - Unique identifier for this bounty
+    /// * `amount` - Token amount to lock (in smallest denomination)
+    /// * `deadline` - Unix timestamp after which refund is allowed
+    ///
+    /// # Returns
+    /// * `Ok(())` - Funds successfully locked
+    /// * `Err(Error::NotInitialized)` - Contract not initialized
+    /// * `Err(Error::BountyExists)` - Bounty ID already in use
+    ///
+    /// # State Changes
+    /// - Transfers `amount` tokens from depositor to contract
+    /// - Creates Escrow record in persistent storage
+    /// - Emits FundsLocked event
+    ///
+    /// # Authorization
+    /// - Depositor must authorize the transaction
+    /// - Depositor must have sufficient token balance
+    /// - Depositor must have approved contract for token transfer
+    ///
+    /// # Security Considerations
+    /// - Bounty ID must be unique (prevents overwrites)
+    /// - Amount must be positive (enforced by token contract)
+    /// - Deadline should be reasonable (recommended: 7-90 days)
+    /// - Token transfer is atomic with state update
+    ///
+    /// # Events
+    /// Emits: `FundsLocked { bounty_id, amount, depositor, deadline }`
+    ///
+    /// # Example
+    /// ```rust
+    /// let depositor = Address::from_string("GDEPOSIT...");
+    /// let amount = 1000_0000000; // 1000 USDC
+    /// let deadline = env.ledger().timestamp() + (30 * 24 * 60 * 60); // 30 days
+    ///
+    /// escrow_client.lock_funds(&depositor, &42, &amount, &deadline)?;
+    /// // Funds are now locked and can be released or refunded
+    /// ```
+    ///
+    /// # Gas Cost
+    /// Medium - Token transfer + storage write + event emission
+    ///
+    /// # Common Pitfalls
+    /// - Forgetting to approve token contract before calling
+    /// - Using a bounty ID that already exists
+    /// - Setting deadline in the past or too far in the future
     pub fn lock_funds(
         env: Env,
         depositor: Address,
@@ -1643,6 +1787,11 @@ impl BountyEscrowContract {
         token_address: Option<Address>, // Optional: if None, uses default token
     ) -> Result<(), Error> {
         anti_abuse::check_rate_limit(&env, depositor.clone());
+
+        // Check blacklist/whitelist
+        if !is_participant_allowed(&env, &depositor) {
+            return Err(Error::ParticipantNotAllowed);
+        }
 
         let start = env.ledger().timestamp();
         let caller = depositor.clone();
@@ -1941,6 +2090,10 @@ impl BountyEscrowContract {
         token_address: Option<Address>, // Optional: if None, uses escrow's primary token
         amount: Option<i128>,           // Optional partial amount
     ) -> Result<(), Error> {
+        // Check blacklist/whitelist for recipient
+        if !is_participant_allowed(&env, &contributor) {
+            return Err(Error::ParticipantNotAllowed);
+        }
         let start = env.ledger().timestamp();
 
         if env.storage().instance().has(&DataKey::ReentrancyGuard) {
