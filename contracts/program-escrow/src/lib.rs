@@ -154,6 +154,10 @@ use soroban_sdk::{
     Map, String, Symbol, Vec,
 };
 
+use grainlify_interfaces::{
+    ConfigurableFee, EscrowLock, EscrowRelease, FeeConfig as SharedFeeConfig, Pausable, RefundMode,
+};
+
 // Event types
 #[allow(dead_code)]
 const PROGRAM_INITIALIZED: Symbol = symbol_short!("ProgInit");
@@ -180,6 +184,27 @@ pub struct FeeConfig {
     pub fee_enabled: bool,      // Global fee enable/disable flag
 }
 
+impl From<SharedFeeConfig> for FeeConfig {
+    fn from(shared: SharedFeeConfig) -> Self {
+        Self {
+            lock_fee_rate: shared.lock_fee_rate,
+            payout_fee_rate: shared.payout_fee_rate,
+            fee_recipient: shared.fee_recipient,
+            fee_enabled: shared.fee_enabled,
+        }
+    }
+}
+
+impl From<FeeConfig> for SharedFeeConfig {
+    fn from(local: FeeConfig) -> Self {
+        Self {
+            lock_fee_rate: local.lock_fee_rate,
+            payout_fee_rate: local.payout_fee_rate,
+            fee_recipient: local.fee_recipient,
+            fee_enabled: local.fee_enabled,
+        }
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct AmountLimits {
@@ -2225,7 +2250,8 @@ impl ProgramEscrowContract {
     }
 
     /// Get current fee configuration (view function)
-    pub fn get_fee_config(env: Env) -> FeeConfig {
+    /// Deprecated: Use ConfigurableFee trait. Keeping internal helper.
+    fn get_fee_config_internal_api(env: Env) -> FeeConfig {
         Self::get_fee_config_internal(&env)
     }
 
